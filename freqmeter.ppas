@@ -1,0 +1,117 @@
+program freqmeter;
+// program frequency meter 1Hz resolution, 50MHz of range
+// LCD (1x16 as 2x8) on PortB of a PIC16F628A
+// Timer#0 : interrupt every 8 ms for 1 sec time base (125 ticks)
+// Timer#1 as counter on PB6 with Interrupt on overflow
+// on 50MHz the maximum count is 26 bit long ($02FAF080)
+// 16 bit of overc + 16 bit of Timer#1
+// I/O configuration:
+// PortA.0= counting Led (out)
+// PortB.0..3,= LCD data (4 bit mode) (out)
+// PortB.4= LCD RS (out)
+// PortB.5= LCD E (out)
+// PortB.6= Timer#1 input (rise front)
+// xtal = 16.00 MHz
+// by G. Carrera 04/12/2011
+var
+  counts: longint;  // main counter
+  overc: word;// T1 overflow counter
+  count: word; //  clock counter
+  outstring: string[16];
+  ticks: byte;
+  int0flg, counting: boolean;
+
+procedure Interrupt();
+ begin
+  if PIR1.TMR1IF=1 then
+    begin  { Timer#1 overflow }
+      overc:= overc + 1;
+      PIR1.TMR1IF:=0; // clear Timer#1 interrupt flag
+    end;
+  if INTCON.T0IF=1 then  // Timer#0 interrupt
+    begin { Timer#0 overflow }
+      int0flg:= true;
+      ticks:= ticks+1;
+      TMR0:= 131; // T0 overflow every 125 counts (8 ms)
+      INTCON.T0IF:=0; // reset Timer#0 interrupt flag
+    end;
+ end;
+
+procedure IOinit;
+// initialize I/O
+begin
+  CMCON := $07; // all digital outputs
+  TRISA.0:= 0;  // PORTA.0 output
+  Lcd_Config(PORTB,3,2,1,0,PORTB,4,7,5);// Initialize LCD on PORT B
+  TRISB := $C0;  // PORTB  0..5 outputs
+  Lcd_Cmd(LCD_CURSOR_OFF);// Turn off cursor
+  T1CON := $06;   // no prescaler, ext. clock, no sync, disable T1
+  PIE1.TMR1IE:=1; // Timer#1 overflow flag  enabled
+  OPTION_REG:= $07; // set prescaler of Timer#0 to 256
+  TMR0:= 131; // T0 overflow every 125 counts (8 ms)
+  INTCON.T0IE:= 1; // Enables Timer#0 interrupt
+  INTCON.T0IF:=0; // reset Timer#0 interrupt flag
+  INTCON.PEIE:=1; // Enables peripheral interrupt
+  INTCON.GIE:= 1; // Enables global interrupt
+  PIR1.TMR1IF:=0;  // clear overflow bit.
+  counts:= 0;  // main counter reset
+  int0flg:= false;
+  ticks:= 0;
+  overc:=0;
+end;
+
+Procedure LCD16(var msg: string[16]);
+{ print on LCD of 16c as 2 rows }
+var
+  i: byte;
+  text1: string[8];
+
+begin
+  text1:='';// null string
+  for i:=0 to 7 Do text1[i]:= msg[i];
+  Lcd_Out(1, 1, text1);// print first 8 caracters on LCD
+  for i:=0 to 7 Do text1[i]:= msg[i+8];
+  Lcd_Out(2, 1, text1);// print last 8 caracters on LCD
+end;
+
+begin { Main program }
+  IOinit;
+  LCD16('G.Car Freq.meter'); // hello message
+  PORTA.0:=0;// led on
+  Delay_ms(1000);
+  LCD16('              Hz');
+  while true Do
+    begin {start of endless loop}
+      if int0flg then
+        begin
+          int0flg:= false;
+          if (ticks = 125) then
+            begin  { 1 second period }
+              ticks:= 0; // clock counter reset
+              if counting then
+                begin
+                  T1CON.TMR1ON:= 0;// Stop counting: disable Timer#1
+                  counts:= overc Shl 16;// combine overflow counter
+                  count:= TMR1H Shl 8;// read Timer#1 Hi counter
+                  count:= count Or TMR1L;
+                  counts:= counts Or count; // add last counting
+                  if (counts > 0) then counts:= counts - 46*overc;// correction value
+                  counting:= false;
+                  PORTA.0:=1;// led off
+                  LongIntToStr(counts, outstring);
+                  LCD16(outstring); // show frequency on LCD
+                end
+              else
+                begin
+                  TMR1H:= 0; // clear Timer#1
+                  TMR1L:= 0;
+                  T1CON.TMR1ON:= 1;//Start counting: enable Timer#1
+                  counts:= 0;  // main counter reset
+                  overc:=0; // T1 overflow counter reset
+                  counting:= true;
+                  PORTA.0:=0;// led on
+                end;
+            end;
+        end;
+    end;{end of main loop}
+end.
